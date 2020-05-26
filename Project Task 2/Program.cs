@@ -30,14 +30,16 @@ namespace Project_Task_2 {
         private const int MAX_STEPS = 100;
         private PictureBox screen;
         private Timer graphicsTimer;
-        private ConcurrentQueue<Task<byte[]>> queue;
+        private ConcurrentQueue<Task<byte[][]>> queue;
+        private Queue<byte[]> currentFrames;
         private int iTime, frames, mspf;
-        private const int fps = 3;
+        private const double fps = 0.1;
 
         public Display() {
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
             InitalizeComponent();
             Render(iTime, graphicsTimer.Interval);
+            iTime += graphicsTimer.Interval * 4;
             graphicsTimer.Start();
         }
 
@@ -50,21 +52,29 @@ namespace Project_Task_2 {
             screen = new PictureBox();
             screen.Size = this.ClientSize;
             this.Controls.Add(screen);
-            queue = new ConcurrentQueue<Task<byte[]>>();
+            queue = new ConcurrentQueue<Task<byte[][]>>();
+            currentFrames = new Queue<byte[]>();
             graphicsTimer = new Timer();
-            graphicsTimer.Interval = 1000 / fps;
+            graphicsTimer.Interval = (int)(1000 / fps);
             graphicsTimer.Tick += (object sender, EventArgs e) => {
-                Render(iTime, graphicsTimer.Interval);
-                iTime += graphicsTimer.Interval * 4;
-                if(queue.TryPeek(out Task<byte[]> stream)) {
-                    if(stream.IsCompleted && queue.TryDequeue(out stream)) {
-                        Stopwatch stopwatch = new Stopwatch();
-                        stopwatch.Start();
-                        screen.Image = ImageFromRawARGBStream(stream.Result, Width, Height);
+                if(currentFrames.Count != 0) {
+                    Stopwatch stopwatch = new Stopwatch();
+                    stopwatch.Start();
+                    byte[] frame = currentFrames.Dequeue();
+                    screen.Image = ImageFromRawARGBStream(frame, Width, Height);
+                    screen.Refresh();
+                    frame = null;
+                    stopwatch.Stop();
+                    this.Text = String.Format("Avg MSPF: {0} FPS: {1}", mspf / frames, Math.Round(1000f / (mspf / frames), 2));
+                } else {
+                    Render(iTime, graphicsTimer.Interval);
+                    iTime += graphicsTimer.Interval * 4;
+                    if(queue.TryDequeue(out Task<byte[][]> stream)) {
+                        if(!stream.IsCompleted)
+                            stream.Wait();
+                        foreach(byte[] vs in stream.Result)
+                            currentFrames.Enqueue(vs);
                         stream.Dispose();
-                        stream = null;
-                        stopwatch.Stop();
-                        this.Text = String.Format("Avg MSPF: {0} FPS: {1}", mspf / frames, Math.Round(1000f / (mspf / frames), 2));
                     }
                 }
             };
@@ -82,34 +92,55 @@ namespace Project_Task_2 {
         }
 
         private void Render(int iTime, int interval) {
-            Task<byte[]> task = new Task<byte[]>(getColorsFromRegion, new Vector<float>(new float[8] {
+            Task<byte[][]> task = new Task<byte[][]>(getColorsFromRegion, new Vector<float>(new float[8] {
                 Width, Height, iTime / 1000f, (iTime + interval) / 1000f, (iTime + interval * 2) / 1000f,
                 (iTime + interval * 3) / 1000f, 0, 0
-            }));
+            }), TaskCreationOptions.LongRunning);
             task.Start();
             queue.Enqueue(task);
         }
 
-        byte[] getColorsFromRegion(object state) {
+        byte[][] getColorsFromRegion(object state) {
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
             Vector<float> vals = (Vector<float>)state;
             int X = (int)vals[0];
             int Y = (int)vals[1];
-            MemoryStream stream = new MemoryStream(X * Y * 4);
-            for(int y = 0; y < Y; y++)
-                for(int x = 0; x < X; x+=4) {
-                    Vector<short> col = GetColorFromPos(new Vector<float>(new float[8] { 
-                        x + .5f, (Height - y) + .5f, (x + 1) + .5f, (Height - (y + 1)) + .5f,
-                        (x + 2) + .5f, (Height - (y + 2)) + .5f, (x + 3) + .5f, (Height - (y + 3)) + .5f}),
+            int size = X * Y * 4;
+            IntPtr r1 = Marshal.AllocHGlobal(size);
+            IntPtr r2 = Marshal.AllocHGlobal(size);
+            IntPtr r3 = Marshal.AllocHGlobal(size);
+            IntPtr r4 = Marshal.AllocHGlobal(size);
+            Console.WriteLine(stopwatch.ElapsedMilliseconds);
+            for(int y = 0; y < Y; y++) {
+                for(int x = 0; x < X; x++) {
+                    float tx = x + .5f;
+                    float ty = (Height - y) + .5f;
+                    Vector<short> col = GetColorFromPos(new Vector<float>(new float[8] { tx, ty, tx, ty, tx, ty, tx, ty, }),
                         new Vector<double>(new double[4] { vals[2], vals[3], vals[4], vals[5] }));
-                    stream.Write(new byte[16] { (byte)col[0], (byte)col[1], (byte)col[2], (byte)col[3],
-                        (byte)col[4], (byte)col[5], (byte)col[6], (byte)col[7],
-                        (byte)col[8], (byte)col[9], (byte)col[10], (byte)col[11],
-                        (byte)col[12], (byte)col[13], (byte)col[14], (byte)col[15]}, 0, 16);
+                    Marshal.Copy(new byte[4] { (byte)col[0], (byte)col[1], (byte)col[2], (byte)col[3] }, 0,
+                        IntPtr.Add(r1, (x + X * y) * 4), 4);
+                    Marshal.Copy(new byte[4] { (byte)col[4], (byte)col[5], (byte)col[6], (byte)col[7] }, 0,
+                        IntPtr.Add(r2, (x + X * y) * 4), 4);
+                    Marshal.Copy(new byte[4] { (byte)col[8], (byte)col[9], (byte)col[10], (byte)col[11] }, 0,
+                        IntPtr.Add(r3, (x + X * y) * 4), 4);
+                    Marshal.Copy(new byte[4] { (byte)col[12], (byte)col[13], (byte)col[14], (byte)col[15] }, 0,
+                        IntPtr.Add(r4, (x + X * y) * 4), 4);
                 }
-            byte[] result = stream.ToArray();
-            stream.Dispose();
+            }
+            byte[][] result = new byte[4][];
+            result[0] = new byte[size];
+            result[1] = new byte[size];
+            result[2] = new byte[size];
+            result[3] = new byte[size];
+            Marshal.Copy(r1, result[0], 0, size);
+            Marshal.Copy(r2, result[1], 0, size);
+            Marshal.Copy(r3, result[2], 0, size);
+            Marshal.Copy(r4, result[3], 0, size);
+            Marshal.FreeHGlobal(r1);
+            Marshal.FreeHGlobal(r2);
+            Marshal.FreeHGlobal(r3);
+            Marshal.FreeHGlobal(r4);
             stopwatch.Stop();
             Interlocked.Add(ref frames, 4);
             Interlocked.Add(ref mspf, (int)stopwatch.ElapsedMilliseconds);
@@ -171,7 +202,7 @@ namespace Project_Task_2 {
 
         Vector<short> GetColorFromPos(Vector<float> pos, Vector<double> iTimes) {
             Vector<float> uvs = Vector.Divide(Vector.Subtract(pos, Vector.Multiply(.5f,
-                new Vector<float>(new float[8] { Width, Height, Width, Height, Width, Height, Width, Height }))), 
+                new Vector<float>(new float[8] { Width, Height, Width, Height, Width, Height, Width, Height }))),
                 new Vector<float>(new float[8] { Height, Height, Height, Height, Height, Height, Height, Height }));
             Vector3x4 col = new Vector3x4(new double[3] { 0.01f, 0.01f, 0.01f });
             Vector3x4 ro = new Vector3x4(new double[3] { 0f, 1f, 0f });
