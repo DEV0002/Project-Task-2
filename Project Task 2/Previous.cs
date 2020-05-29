@@ -37,6 +37,7 @@
 //            InitalizeComponent();
 //            this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
 //            this.Paint += Form1_Paint;
+//            new Task(Render).Start();
 //            graphicsTimer = new Timer();
 //            graphicsTimer.Interval = 1000 / (int)MAX_THREADS;
 //            graphicsTimer.Tick += GraphicsTimer_Tick;
