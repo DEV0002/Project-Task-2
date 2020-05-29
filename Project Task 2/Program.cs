@@ -30,87 +30,90 @@ namespace Project_Task_2 {
         private Vector<double> MAX_DIST = new Vector<double>(100), SURF_DIST = new Vector<double>(0.01f);
         private const int MAX_STEPS = 100;
         private PictureBox screen;
-        private Timer graphicsTimer, renderTimer;
-        private ConcurrentQueue<Task<byte[]>> queue;
-        private int iTime, frames, mspf, fps, rtt, tfps;
-        private readonly double renderTimerInterval;
+        private long tf, mspf;
+        private bool running;
+        private readonly long nspt;
+        private Thread renderThread;
 
         public Display() {
-            renderTimerInterval = Environment.ProcessorCount;
+            nspt = 1000000000 / Stopwatch.Frequency;
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
             InitalizeComponent();
-            Task<byte[]> task = new Task<byte[]>(GetColorsFromRegion, new Vector3(Width, Height, iTime), TaskCreationOptions.RunContinuationsAsynchronously);
-            task.Start();
-            queue.Enqueue(task);
-            task.Wait();
-            graphicsTimer.Start();
-            renderTimer.Start();
+            renderThread = new Thread(RenderLoop);
+            renderThread.Start();
+
         }
 
         private void InitalizeComponent() {
-            this.Width = 640;
-            this.Height = 480;
+            this.Width = 800;
+            this.Height = 600;
             this.ClientSize = new System.Drawing.Size(Width, Height);
             this.Text = "PT2";
             this.Visible = true;
             screen = new PictureBox();
             screen.Size = this.ClientSize;
             this.Controls.Add(screen);
-            queue = new ConcurrentQueue<Task<byte[]>>();
-            frames = mspf = 1;
-            fps = rtt = tfps = 0;
-            graphicsTimer = new Timer();
-            graphicsTimer.Interval = (int)(1000 / renderTimerInterval);
-            graphicsTimer.Tick += (object sender, EventArgs e) => {
-                if(queue.TryPeek(out Task<byte[]> frame)) {
-                    if(frame.IsCompleted) {
-                        Stopwatch stopwatch = new Stopwatch();
-                        stopwatch.Start();
-                        queue.TryDequeue(out frame);
-                        screen.Image = ImageFromRawARGBStream(frame.Result, Width, Height);
-                        screen.Update();
-                        this.Update();
-                        frame = null;
-                        stopwatch.Stop();
-                        Console.WriteLine("Frame Rendered in {0}ms", stopwatch.ElapsedMilliseconds);
-                    }
-                }
-                this.Text = String.Format("Avg MSPF: {0} FPS: {1}", mspf / frames, tfps);
-            };
-            renderTimer = new Timer();
-            renderTimer.Interval = (int)(1000 / renderTimerInterval);
-            renderTimer.Tick += (object sender, EventArgs e) => {
-                if(rtt >= renderTimerInterval) {
-                    tfps = fps;
-                    rtt = 0;
-                    fps = 0;
-                }
-                rtt++;
-                Render(iTime, graphicsTimer.Interval);
-                iTime += graphicsTimer.Interval;
-            };
+            tf = mspf = 0;
         }
 
-        public static Image ImageFromRawARGBStream(byte[] stream, int width, int height) {
-            var output = new Bitmap(width, height);
-            var rect = new Rectangle(0, 0, width, height);
+        private void RenderLoop() {
+            running = true;
+            Stopwatch time = new Stopwatch();
+            time.Start();
+            long lastTime = time.ElapsedTicks * nspt;
+            double ammountOfTicks = 60.0;
+            double ns = 1000000000.0 / ammountOfTicks;
+            double delta = 0;
+            long timer = time.ElapsedMilliseconds;
+            int frames = 0;
+            while(running) {
+                long now = time.ElapsedTicks * nspt;
+                delta += (now - lastTime) / ns;
+                lastTime = now;
+                while(delta >= 1) {
+                    Tick();
+                    delta--;
+                }
+                if(running)
+                    Render(time.ElapsedMilliseconds / 1000f);
+                frames++;
+                if(time.ElapsedMilliseconds - timer > 1000) {
+                    timer += 1000;
+                    this.Text = String.Format("Avg MSPF: {0} FPS: {1}", mspf / tf, frames);
+                    frames = 0;
+                }
+            }
+        }
+
+        private void Tick() {
+            
+        }
+
+        private void Render(float iTime) {
+            Stopwatch stopwatch = new Stopwatch();
+            stopwatch.Start();
+            var output = new Bitmap(Width, Height);
+            var rect = new Rectangle(0, 0, Width, Height);
             var bmpData = output.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+            byte[] frame = new byte[Width * Height * 4];
             var ptr = bmpData.Scan0;
-            Marshal.Copy(stream, 0, ptr, stream.Length);
+            Parallel.For(0, Height, y => {
+                for(int x = 0; x < Width; x++) {
+                    Vector4 col = getColorFromPos(new Vector2(x + .5f, Height - y + .5f), iTime);
+                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, ptr+((x + Width * y) * 4), 4);
+                    //Buffer.BlockCopy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, frame,
+                    //    (x + Width * y) * 4, 4);
+                }
+            });
             output.UnlockBits(bmpData);
-            return output;
-        }
-
-        private void Render(int iTime, int interval) {
-            //Task<byte[][]> task = new Task<byte[][]>(getColorsFromRegion, new Vector<float>(new float[8] {
-            //    Width, Height, iTime / 1000f, (iTime + interval) / 1000f, (iTime + interval * 2) / 1000f,
-            //    (iTime + interval * 3) / 1000f, 0, 0
-            //}), TaskCreationOptions.LongRunning);
-            //task.Start();
-            //queue.Enqueue(task);
-            Task<byte[]> task = new Task<byte[]>(GetColorsFromRegion, new Vector3(Width, Height, iTime), TaskCreationOptions.RunContinuationsAsynchronously);
-            task.Start();
-            queue.Enqueue(task);
+            screen.Image = output;
+            screen.Update();
+            frame = null;
+            output = null;
+            stopwatch.Stop();
+            tf++;
+            mspf += stopwatch.ElapsedMilliseconds;
+            Console.WriteLine("Frame Rendered in {0}ms", stopwatch.ElapsedMilliseconds);
         }
 
         //byte[][] getColorsFromRegion(object state) {
@@ -160,28 +163,6 @@ namespace Project_Task_2 {
         //    Console.WriteLine("4 Frames Rendered in {0}ms", stopwatch.ElapsedMilliseconds);
         //    return result;
         //}
-
-        byte[] GetColorsFromRegion(object state) {
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
-            Vector3 region = (Vector3)state;
-            int X = (int)region.X;
-            int Y = (int)region.Y;
-            float iTime = region.Z;
-            byte[] stream = new byte[X * Y * 4];
-            Parallel.For(0, Y, y => {
-                for(int x = 0; x < X; x++) {
-                    Vector4 col = getColorFromPos(new Vector2(x + .5f, Height - y + .5f), iTime);
-                    Buffer.BlockCopy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, stream, (x + X * y) * 4, 4);
-                }
-            });
-            stopwatch.Stop();
-            Interlocked.Increment(ref frames);
-            Interlocked.Increment(ref fps);
-            Interlocked.Add(ref mspf, (int)stopwatch.ElapsedMilliseconds);
-            Console.WriteLine("Frame Pre-Rendered in {0}ms", stopwatch.ElapsedMilliseconds);
-            return stream;
-        }
 
         //struct Vector3x4 {
         //    public Vector<double> X, Y, Z;
