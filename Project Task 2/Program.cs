@@ -107,13 +107,15 @@ namespace Project_Task_2 {
             var bmpData = output.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
             var ptr = bmpData.Scan0;
             Parallel.For(0, Width, x => {
-                Vector4 col = getColorFromPos(new Vector2(x + .5f, Height + .5f), iTime);
+                Vector3 col = getColorFromPos(new Vector2(x + .5f, Height + .5f), iTime);
                 for(int y = 1; y < Height; y += 2) {
-                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0,
+                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)255 }, 0,
                         ptr + ((x + Width * (y - 1)) * 4), 4);
-                    Vector4 newCol = getColorFromPos(new Vector2(x + .5f, Height - (y + 1) + .5f), iTime);
-                    Marshal.Copy(new byte[4] { (byte)((col.X + newCol.X) / 2), (byte)((col.Y + newCol.Y) / 2),
-                        (byte)((col.Z + newCol.Z) / 2), (byte)col.W }, 0, ptr + ((x + Width * y) * 4), 4);
+                    Vector3 newCol = getColorFromPos(new Vector2(x + .5f, Height - (y + 1) + .5f), iTime);
+                    Vector3 mix = Lerp(col, newCol, 0.5f);
+                    //Marshal.Copy(new byte[4] { (byte)((col.X + newCol.X) / 2), (byte)((col.Y + newCol.Y) / 2),
+                    //    (byte)((col.Z + newCol.Z) / 2), (byte)255 }, 0, ptr + ((x + Width * y) * 4), 4); Averaging
+                    Marshal.Copy(new byte[4] { (byte)mix.X, (byte)mix.Y, (byte)mix.Z, (byte)255 }, 0, ptr + ((x + Width * y) * 4), 4);
                     col = newCol;
                     //Buffer.BlockCopy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, frame,
                     //    (x + Width * y) * 4, 4);
@@ -127,6 +129,10 @@ namespace Project_Task_2 {
             tf++;
             mspf += stopwatch.ElapsedMilliseconds;
             Console.WriteLine("Frame Rendered in {0}ms", stopwatch.ElapsedMilliseconds);
+        }
+
+        Vector3 Lerp(Vector3 a, Vector3 b, float t) {
+            return new Vector3(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t);
         }
 
         private void SetImage(Bitmap img) {
@@ -334,7 +340,7 @@ namespace Project_Task_2 {
         //    return Normalize(n);
         //}
 
-        Vector4 getColorFromPos(Vector2 pos, float iTime) {
+        Vector3 getColorFromPos(Vector2 pos, float iTime) {
             Vector2 uv = Vector2.Divide(Vector2.Subtract(pos, Vector2.Multiply(.5f, new Vector2(Width, Height))), Height);
             Vector3 col = new Vector3(0.01f);
             Vector3 ro = new Vector3(0f, 1f, 0f);
@@ -354,8 +360,7 @@ namespace Project_Task_2 {
                     dif *= .1f;
                 col += dif * lightColor;
             }
-            Vector4 fragCol = new Vector4(Vector3.Multiply(255f, col), 255f);
-            return Vector4.Clamp(fragCol, Vector4.Zero, new Vector4(255f));
+            return Vector3.Clamp(Vector3.Multiply(255f, col), Vector3.Zero, new Vector3(255f));
         }
 
         float Clamp(float n, float min, float max) {
