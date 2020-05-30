@@ -35,10 +35,11 @@ namespace Project_Task_2 {
         private const int MAX_STEPS = 100;
         private PictureBox screen;
         private long tf, mspf, toProcess;
-        private bool running;
+        private bool running, checkerboard;
         private readonly long nspt;
         private readonly int MAX_THREADS;
         private Thread renderThread;
+        private ConcurrentDictionary<Vector2, Vector3> rayDirections;
 
         public Display() {
             MAX_THREADS = Environment.ProcessorCount - 2;
@@ -55,11 +56,22 @@ namespace Project_Task_2 {
             this.ClientSize = new System.Drawing.Size(Width, Height);
             this.Text = "PT2";
             this.Visible = true;
+            this.CenterToScreen();
             screen = new PictureBox();
             screen.Size = this.ClientSize;
+            screen.Image = new Bitmap(Width, Height);
             this.Controls.Add(screen);
             this.FormClosed += new FormClosedEventHandler(Form1_FormClosed);
             tf = mspf = 0;
+            rayDirections = new ConcurrentDictionary<Vector2, Vector3>();
+            Parallel.For(0, Width, x => {
+                for(int y = 0; y < Height; y++) {
+                    Vector2 pos = new Vector2(x + 0.5f, Height - y + 0.5f);
+                    rayDirections.TryAdd(pos, Vector3.Normalize(new Vector3(Vector2.Divide(Vector2.Subtract(pos,
+                        Vector2.Multiply(.5f, new Vector2(Width, Height))), Height), 1f)));
+                }
+            });
+            checkerboard = false;
         }
 
         void Form1_FormClosed(object sender, FormClosedEventArgs e) {
@@ -102,11 +114,13 @@ namespace Project_Task_2 {
         private void Render(float iTime) {
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
-            var output = new Bitmap(Width, Height);
+            Bitmap output = new Bitmap(screen.Image);
             var rect = new Rectangle(0, 0, Width, Height);
             var bmpData = output.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
             var ptr = bmpData.Scan0;
-            Parallel.For(0, Width, x => {
+            int AB = checkerboard ? 1 : 0;
+            Parallel.For(0, Width/2, tx => {
+                int x = tx * 2 + AB;
                 Vector3 col = getColorFromPos(new Vector2(x + .5f, Height + .5f), iTime);
                 for(int y = 1; y < Height; y += 2) {
                     Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)255 }, 0,
@@ -121,6 +135,7 @@ namespace Project_Task_2 {
                     //    (x + Width * y) * 4, 4);
                 }
             });
+            checkerboard = !checkerboard;
             output.UnlockBits(bmpData);
             SetImage(output);
             UpdateScreen();
@@ -341,10 +356,10 @@ namespace Project_Task_2 {
         //}
 
         Vector3 getColorFromPos(Vector2 pos, float iTime) {
-            Vector2 uv = Vector2.Divide(Vector2.Subtract(pos, Vector2.Multiply(.5f, new Vector2(Width, Height))), Height);
             Vector3 col = new Vector3(0.01f);
             Vector3 ro = new Vector3(0f, 1f, 0f);
-            Vector3 rd = Vector3.Normalize(new Vector3(uv, 1f));
+            if(!rayDirections.TryGetValue(pos, out Vector3 rd))
+                throw new ArgumentNullException(String.Format("Unable to get Ray Direction for x:{0} y:{1}", pos.X - .5f, pos.Y - .5f));
             float t = RayMarch(ro, rd);
             if(t < 100) {
                 Vector3 p = Vector3.Add(ro, Vector3.Multiply(rd, t));
