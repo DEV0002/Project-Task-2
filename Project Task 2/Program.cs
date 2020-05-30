@@ -11,6 +11,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Dataflow;
 using System.Windows.Forms;
 using Timer = System.Windows.Forms.Timer;
 
@@ -27,33 +28,42 @@ namespace Project_Task_2 {
     }
 
     class Display : Form {
+        private delegate void SetImageDelegate(Bitmap img);
+        private delegate void SetTextDelegate(string str);
+        private delegate void UpdateDelegate();
         private Vector<double> MAX_DIST = new Vector<double>(100), SURF_DIST = new Vector<double>(0.01f);
         private const int MAX_STEPS = 100;
         private PictureBox screen;
-        private long tf, mspf;
+        private long tf, mspf, toProcess;
         private bool running;
         private readonly long nspt;
+        private readonly int MAX_THREADS;
         private Thread renderThread;
 
         public Display() {
+            MAX_THREADS = Environment.ProcessorCount - 2;
             nspt = 1000000000 / Stopwatch.Frequency;
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
             InitalizeComponent();
             renderThread = new Thread(RenderLoop);
             renderThread.Start();
-
         }
 
         private void InitalizeComponent() {
-            this.Width = 800;
-            this.Height = 600;
+            this.Width = 640;
+            this.Height = 480;
             this.ClientSize = new System.Drawing.Size(Width, Height);
             this.Text = "PT2";
             this.Visible = true;
             screen = new PictureBox();
             screen.Size = this.ClientSize;
             this.Controls.Add(screen);
+            this.FormClosed += new FormClosedEventHandler(Form1_FormClosed);
             tf = mspf = 0;
+        }
+
+        void Form1_FormClosed(object sender, FormClosedEventArgs e) {
+            Environment.Exit(0);
         }
 
         private void RenderLoop() {
@@ -79,7 +89,7 @@ namespace Project_Task_2 {
                 frames++;
                 if(time.ElapsedMilliseconds - timer > 1000) {
                     timer += 1000;
-                    this.Text = String.Format("Avg MSPF: {0} FPS: {1}", mspf / tf, frames);
+                    SetText(String.Format("Avg MSPF: {0} FPS: {1}", mspf / tf, frames));
                     frames = 0;
                 }
             }
@@ -95,25 +105,47 @@ namespace Project_Task_2 {
             var output = new Bitmap(Width, Height);
             var rect = new Rectangle(0, 0, Width, Height);
             var bmpData = output.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-            byte[] frame = new byte[Width * Height * 4];
             var ptr = bmpData.Scan0;
             Parallel.For(0, Height, y => {
                 for(int x = 0; x < Width; x++) {
                     Vector4 col = getColorFromPos(new Vector2(x + .5f, Height - y + .5f), iTime);
-                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, ptr+((x + Width * y) * 4), 4);
+                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, ptr + ((x + Width * y) * 4), 4);
                     //Buffer.BlockCopy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, frame,
                     //    (x + Width * y) * 4, 4);
                 }
             });
             output.UnlockBits(bmpData);
-            screen.Image = output;
-            screen.Update();
-            frame = null;
+            SetImage(output);
+            UpdateScreen();
             output = null;
             stopwatch.Stop();
             tf++;
             mspf += stopwatch.ElapsedMilliseconds;
             Console.WriteLine("Frame Rendered in {0}ms", stopwatch.ElapsedMilliseconds);
+        }
+
+        private void SetImage(Bitmap img) {
+            if(screen.InvokeRequired) {
+                var invoke = new SetImageDelegate(SetImage);
+                screen.Invoke(invoke, new object[] { img });
+            } else
+                screen.Image = img;
+        }
+
+        private void UpdateScreen() {
+            if(screen.InvokeRequired) {
+                var invoke = new UpdateDelegate(UpdateScreen);
+                screen.Invoke(invoke);
+            } else
+                screen.Update();
+        }
+
+        private void SetText(string str) {
+            if(this.InvokeRequired) {
+                var invoke = new SetTextDelegate(SetText);
+                this.Invoke(invoke, new object[] { str });
+            } else
+                this.Text = str;
         }
 
         //byte[][] getColorsFromRegion(object state) {
