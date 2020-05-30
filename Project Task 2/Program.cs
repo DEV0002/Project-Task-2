@@ -106,10 +106,15 @@ namespace Project_Task_2 {
             var rect = new Rectangle(0, 0, Width, Height);
             var bmpData = output.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
             var ptr = bmpData.Scan0;
-            Parallel.For(0, Height, y => {
-                for(int x = 0; x < Width; x++) {
-                    Vector4 col = getColorFromPos(new Vector2(x + .5f, Height - y + .5f), iTime);
-                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, ptr + ((x + Width * y) * 4), 4);
+            Parallel.For(0, Width, x => {
+                Vector4 col = getColorFromPos(new Vector2(x + .5f, Height + .5f), iTime);
+                for(int y = 1; y < Height; y += 2) {
+                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0,
+                        ptr + ((x + Width * (y - 1)) * 4), 4);
+                    Vector4 newCol = getColorFromPos(new Vector2(x + .5f, Height - (y + 1) + .5f), iTime);
+                    Marshal.Copy(new byte[4] { (byte)((col.X + newCol.X) / 2), (byte)((col.Y + newCol.Y) / 2),
+                        (byte)((col.Z + newCol.Z) / 2), (byte)col.W }, 0, ptr + ((x + Width * y) * 4), 4);
+                    col = newCol;
                     //Buffer.BlockCopy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, frame,
                     //    (x + Width * y) * 4, 4);
                 }
