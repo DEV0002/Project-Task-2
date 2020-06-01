@@ -1,15 +1,17 @@
-﻿using System;
-using System.Collections.Concurrent;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Numerics;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Collections.Generic;
 
-namespace Project_Task_2 {
+namespace PT2Intrinsics {
     class Program {
         [MTAThread]
         static void Main() {
@@ -31,7 +33,7 @@ namespace Project_Task_2 {
         private bool running, interlaceAB;
         private readonly long nspt;
         private Thread renderThread;
-        private ConcurrentDictionary<Vector2, Vector3> rayDirections;
+        private Queue<Keys> keyQueue;
 
         public Display() {
             nspt = 1000000000 / Stopwatch.Frequency;
@@ -44,7 +46,8 @@ namespace Project_Task_2 {
         private void InitalizeComponent() {
             this.Width = 640;
             this.Height = 480;
-            this.ClientSize = new System.Drawing.Size(Width, Height);
+            this.Size = new System.Drawing.Size(Width, Height);
+            this.FormBorderStyle = FormBorderStyle.None;
             this.Text = "PT2";
             this.Visible = true;
             this.CenterToScreen();
@@ -53,20 +56,18 @@ namespace Project_Task_2 {
             screen.Image = new Bitmap(Width, Height);
             this.Controls.Add(screen);
             this.FormClosed += new FormClosedEventHandler(Form1_FormClosed);
+            this.KeyDown += Form1_KeyDown;
+            keyQueue = new Queue<Keys>();
             tf = mspf = 0;
-            rayDirections = new ConcurrentDictionary<Vector2, Vector3>();
-            Parallel.For(0, Height, y => {
-                for(int x = 0; x < Width; x++) {
-                    Vector2 pos = new Vector2(x + 0.5f, Height - y + 0.5f);
-                    rayDirections.TryAdd(pos, Vector3.Normalize(new Vector3(Vector2.Divide(Vector2.Subtract(pos,
-                        Vector2.Multiply(.5f, new Vector2(Width, Height))), Height), 1f)));
-                }
-            });
             interlaceAB = false;
         }
 
         void Form1_FormClosed(object sender, FormClosedEventArgs e) {
             Environment.Exit(0);
+        }
+
+        void Form1_KeyDown(object sender, KeyEventArgs e) {
+            keyQueue.Enqueue(e.KeyCode);
         }
 
         private void RenderLoop() {
@@ -92,14 +93,26 @@ namespace Project_Task_2 {
                 frames++;
                 if(time.ElapsedMilliseconds - timer > 1000) {
                     timer += 1000;
-                    SetText(String.Format("Avg MSPF: {0} FPS: {1}", mspf / tf, frames));
+                    Console.Title = String.Format("Avg MSPF: {0} FPS: {1}", mspf / tf, frames);
                     frames = 0;
                 }
             }
         }
 
         private void Tick() {
-            
+            if(keyQueue.TryDequeue(out Keys currentKey))
+                switch(currentKey) {
+                    case Keys.Escape:
+                        InvokeClose();
+                        break;
+                }
+        }
+
+        private void InvokeClose() {
+            if(this.InvokeRequired)
+                this.Invoke(new UpdateDelegate(InvokeClose));
+            else
+                this.Close();
         }
 
         private void SetImage(Bitmap img) {
@@ -136,13 +149,13 @@ namespace Project_Task_2 {
             var bmpData = output.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
             var ptr = bmpData.Scan0;
             int AB = interlaceAB ? 1 : 0;
-            Parallel.For(0, Width / 2, tx => {
-                int x = tx * 2 + AB;
-                Vector3 col = getColorFromPos(new Vector2(x + .5f, Height + .5f), iTime);
-                for(int y = 1; y < Height; y += 2) {
+            Parallel.For(0, Height / 2, ty => {
+                int y = ty * 2 + AB;
+                Vector3 col = getColorFromPos(new Vector2(Width + .5f, y + .5f), iTime);
+                for(int x = 1; x < Width; x += 2) {
                     Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, 255 }, 0,
-                        ptr + ((x + Width * (y - 1)) * 4), 4);
-                    Vector3 newCol = getColorFromPos(new Vector2(x + .5f, Height - (y + 1) + .5f), iTime);
+                        ptr + (((x - 1) + Width * y) * 4), 4);
+                    Vector3 newCol = getColorFromPos(new Vector2((x + 1) + .5f, Height - y + .5f), iTime);
                     Vector3 mix = Lerp(col, newCol, 0.5f);
                     Marshal.Copy(new byte[4] { (byte)mix.X, (byte)mix.Y, (byte)mix.Z, 255 }, 0, ptr + ((x + Width * y) * 4), 4); //Lerping
                     col = newCol;
@@ -170,8 +183,8 @@ namespace Project_Task_2 {
         Vector3 getColorFromPos(Vector2 pos, float iTime) {
             Vector3 col = new Vector3(0.01f);
             Vector3 ro = new Vector3(0f, 1f, 0f);
-            if(!rayDirections.TryGetValue(pos, out Vector3 rd))
-                throw new ArgumentNullException(String.Format("Unable to get Ray Direction for x:{0} y:{1}", pos.X - .5f, pos.Y - .5f));
+            Vector3 rd = Vector3.Normalize(new Vector3(Vector2.Divide(Vector2.Subtract(pos,
+                Vector2.Multiply(.5f, new Vector2(Width, Height))), Height), 1f));
             float t = RayMarch(ro, rd);
             if(t < 100) {
                 Vector3 p = Vector3.Add(ro, Vector3.Multiply(rd, t));
