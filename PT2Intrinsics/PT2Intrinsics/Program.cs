@@ -44,9 +44,16 @@ namespace PT2Intrinsics {
         struct Light {
             public Vector3 XYZ;
             public Vector3 RGB;
+            public float lightIntensity;
             public Light(Vector3 _XYZ, Vector3 _RGB) {
                 XYZ = _XYZ;
                 RGB = _RGB;
+                lightIntensity = 1f;
+            }
+            public Light(Vector3 _XYZ, Vector3 _RGB, float _li) {
+                XYZ = _XYZ;
+                RGB = _RGB;
+                lightIntensity = _li;
             }
         }
 
@@ -204,12 +211,13 @@ namespace PT2Intrinsics {
             int AB = interlaceAB ? 1 : 0;
             Parallel.For(0, Height / 2, ty => {
                 int y = ty * 2 + AB;
+                Vector3 newCol, mix;
                 Vector3 col = getColorFromPos(new Vector2(Width + .5f, y + .5f), iTime);
                 for(int x = 1; x < Width; x += 2) {
                     Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, 255 }, 0,
                         ptr + (((x - 1) + Width * y) * 4), 4);
-                    Vector3 newCol = getColorFromPos(new Vector2((x + 1) + .5f, Height - y + .5f), iTime);
-                    Vector3 mix = Lerp(col, newCol, 0.5f);
+                    newCol = getColorFromPos(new Vector2((x + 1) + .5f, Height - y + .5f), iTime);
+                    mix = Lerp(col, newCol, 0.5f);
                     Marshal.Copy(new byte[4] { (byte)mix.X, (byte)mix.Y, (byte)mix.Z, 255 }, 0, ptr + ((x + Width * y) * 4), 4); //Lerping
                     col = newCol;
                     //Marshal.Copy(new byte[4] { (byte)((col.X + newCol.X) / 2), (byte)((col.Y + newCol.Y) / 2),
@@ -246,8 +254,8 @@ namespace PT2Intrinsics {
                     float dif = Clamp(Vector3.Dot(n, l), 0f, 1f);
                     float d = RayMarch(p + n * 0.01f, l);
                     if(d < Vector3.Distance(light.XYZ, p))
-                        dif *= .1f;
-                    col += dif * light.RGB * GetSampleColor(p);
+                        dif *= 0.2f;
+                    col += dif * light.RGB * GetSampleColor(p) * light.lightIntensity;
                 }
             }
             return Vector3.Clamp(Vector3.Multiply(255f, col), Vector3.Zero, new Vector3(255f));
