@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 16
 VisualStudioVersion = 16.0.30114.105
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PT2Intrinsics", "PT2Intrinsics\PT2Intrinsics.csproj", "{4FC92407-E25B-46D6-BC44-870EC36F0835}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "PT2Core", "PT2Intrinsics\PT2Core.csproj", "{4FC92407-E25B-46D6-BC44-870EC36F0835}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

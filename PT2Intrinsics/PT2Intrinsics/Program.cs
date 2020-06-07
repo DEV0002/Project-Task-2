@@ -3,18 +3,13 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Numerics;
-using System.Runtime.Intrinsics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
-using GLS.Intrinsics;
-using System.Runtime.Intrinsics.X86;
-using System.Collections.ObjectModel;
 
-namespace PT2Intrinsics {
+namespace PT2Core {
     class Program {
         [MTAThread]
         static void Main() {
@@ -37,8 +32,9 @@ namespace PT2Intrinsics {
         private readonly long nspt;
         private Thread renderThread;
         private Queue<Keys> keyQueue;
-        private Object[] objects;
-        private Light[] lights;
+        private List<Object> objects;
+        private List<Light> lights;
+        private Vector3[] rayDirections;
         private Vector3 CameraPos;
 
         struct Light {
@@ -60,22 +56,33 @@ namespace PT2Intrinsics {
         struct Object {
             public enum ObjectType {
                 Sphere = 0,
-                Box = 1
+                Box = 1,
+                Plane = 2
             };
             public Vector3 XYZ;
             public Vector3 SXYZ;
             public Vector3 RGB;
+            public Vector3 N;
             public ObjectType type;
             public Object(Vector3 _XYZ, Vector3 _SXYZ, Vector3 _RGB, ObjectType _type) {
                 XYZ = _XYZ;
                 SXYZ = _SXYZ;
                 RGB = _RGB;
+                N = new Vector3(0);
                 type = _type;
+            }
+            public void SetNormal(Vector3 _N) {
+                N = Vector3.Normalize(_N);
             }
             public float SDF(Vector3 pos) {
                 switch(type) {
-                    case 0:
+                    case ObjectType.Sphere:
                         return Vector3.Distance(pos, XYZ) - SXYZ.X;
+                    case ObjectType.Box:
+                        Vector3 q = Vector3.Abs(pos) - SXYZ;
+                        return (Vector3.Max(q, new Vector3(.0f))).Length() + (float)Math.Min(Math.Max(q.X, Math.Max(q.Y, q.Z)), 0.0);
+                    case ObjectType.Plane:
+                        return Vector3.Dot(pos, N) - SXYZ.X;
                     default:
                         return 0;
                 }
@@ -97,6 +104,9 @@ namespace PT2Intrinsics {
             this.Size = new System.Drawing.Size(Width, Height);
             this.Text = "PT2";
             this.Visible = true;
+            this.FormBorderStyle = FormBorderStyle.FixedSingle;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
             this.CenterToScreen();
             screen = new PictureBox();
             screen.Size = this.Size;
@@ -108,12 +118,25 @@ namespace PT2Intrinsics {
             tf = mspf = 0;
             interlaceAB = false;
             CameraPos = new Vector3(0, 1, 0);
+            rayDirections = new Vector3[this.Width * this.Height];
+            //Calculate Ray Directions
+            Parallel.For(0, Height, y => {
+                for(int x = 0; x < this.Width; x++)
+                    rayDirections[(int)(x + this.Width * y)] = Vector3.Normalize(new Vector3(Vector2.Divide(Vector2.Subtract(new Vector2(x + .5f, Height - y + .5f),
+                        Vector2.Multiply(.5f, new Vector2(Width, Height))), Height), 1f));
+            });
 
             //Initalize Objects
-            objects = new Object[]{ new Object(new Vector3(0, 1, 6), new Vector3(1), new Vector3(1, 0, 0), Object.ObjectType.Sphere) };
+            objects = new List<Object>();
+            objects.Add(new Object(new Vector3(0, 1, 6), new Vector3(1), new Vector3(1, 0, 0), Object.ObjectType.Sphere));
 
             //Initalize Lights
-            lights = new Light[]{ new Light(new Vector3(0, 5, 6), new Vector3(1)) };
+            lights = new List<Light>();
+            lights.Add(new Light(new Vector3(0, 5, 6), new Vector3(1)));
+
+            //Show Form and Get Focus
+            this.Show();
+            this.Focus();
         }
 
         void Form1_FormClosed(object sender, FormClosedEventArgs e) {
@@ -139,11 +162,11 @@ namespace PT2Intrinsics {
                 delta += (now - lastTime) / ns;
                 lastTime = now;
                 while(delta >= 1) {
-                    Tick();
+                    Tick(time.ElapsedMilliseconds / 1000f);
                     delta--;
                 }
                 if(running)
-                    RenderNormal(time.ElapsedMilliseconds / 1000f);
+                    Render();
                 frames++;
                 if(time.ElapsedMilliseconds - timer > 1000) {
                     timer += 1000;
@@ -153,7 +176,7 @@ namespace PT2Intrinsics {
             }
         }
 
-        private void Tick() {
+        private void Tick(float iTime) {
             if(keyQueue.TryDequeue(out Keys currentKey))
                 switch(currentKey) {
                     case Keys.Escape:
@@ -199,9 +222,7 @@ namespace PT2Intrinsics {
                 this.Text = str;
         }
 
-        #region Normal
-
-        private void RenderNormal(float iTime) {
+        private void Render() {
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
             Bitmap output = new Bitmap(screen.Image);
@@ -211,20 +232,22 @@ namespace PT2Intrinsics {
             int AB = interlaceAB ? 1 : 0;
             Parallel.For(0, Height / 2, ty => {
                 int y = ty * 2 + AB;
-                Vector3 newCol, mix;
-                Vector3 col = getColorFromPos(new Vector2(Width + .5f, y + .5f), iTime);
-                for(int x = 1; x < Width; x += 2) {
-                    Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, 255 }, 0,
+                if(y < Height) {
+                    Vector3 newCol, mix;
+                    Vector3 col = getColorFromPos(new Vector2(Width - 1, y));
+                    for(int x = 1; x < Width - 1; x += 2) {
+                        Marshal.Copy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, 255 }, 0,
                         ptr + (((x - 1) + Width * y) * 4), 4);
-                    newCol = getColorFromPos(new Vector2((x + 1) + .5f, Height - y + .5f), iTime);
-                    mix = Lerp(col, newCol, 0.5f);
-                    Marshal.Copy(new byte[4] { (byte)mix.X, (byte)mix.Y, (byte)mix.Z, 255 }, 0, ptr + ((x + Width * y) * 4), 4); //Lerping
-                    col = newCol;
-                    //Marshal.Copy(new byte[4] { (byte)((col.X + newCol.X) / 2), (byte)((col.Y + newCol.Y) / 2),
-                    //    (byte)((col.Z + newCol.Z) / 2), (byte)255 }, 0, ptr + ((x + Width * y) * 4), 4); Averaging
-                    //Buffer.BlockCopy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, frame,
-                    //    (x + Width * y) * 4, 4); BlockCopy instead or Marshal.Copy
-                }
+                        newCol = getColorFromPos(new Vector2((x + 1), y));
+                        mix = Lerp(col, newCol, 0.5f);
+                        Marshal.Copy(new byte[4] { (byte)mix.X, (byte)mix.Y, (byte)mix.Z, 255 }, 0, ptr + ((x + Width * y) * 4), 4); //Lerping
+                        col = newCol;
+                        //Marshal.Copy(new byte[4] { (byte)((col.X + newCol.X) / 2), (byte)((col.Y + newCol.Y) / 2),
+                        //    (byte)((col.Z + newCol.Z) / 2), (byte)255 }, 0, ptr + ((x + Width * y) * 4), 4); Averaging
+                        //Buffer.BlockCopy(new byte[4] { (byte)col.X, (byte)col.Y, (byte)col.Z, (byte)col.W }, 0, frame,
+                        //    (x + Width * y) * 4, 4); BlockCopy instead or Marshal.Copy    
+                    }
+                }    
             });
             interlaceAB = !interlaceAB;
             output.UnlockBits(bmpData);
@@ -241,10 +264,9 @@ namespace PT2Intrinsics {
             return new Vector3(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t);
         }
 
-        Vector3 getColorFromPos(Vector2 pos, float iTime) {
+        Vector3 getColorFromPos(Vector2 pos) {
             Vector3 col = new Vector3(0f); //Ambient Light
-            Vector3 rd = Vector3.Normalize(new Vector3(Vector2.Divide(Vector2.Subtract(pos,
-                Vector2.Multiply(.5f, new Vector2(Width, Height))), Height), 1f));
+            Vector3 rd = rayDirections[(int)(pos.X + this.Width * pos.Y)];
             float t = RayMarch(CameraPos, rd);
             if(t < 100) {
                 Vector3 p = Vector3.Add(CameraPos, Vector3.Multiply(rd, t));
@@ -317,141 +339,5 @@ namespace PT2Intrinsics {
             return Vector3.Normalize(n);
         }
 
-        #endregion
-
-        //IGNORE! No Performance Benifints
-        #region Intrinsics
-
-        private void RenderIntrinsics(float iTime) {
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
-            Bitmap output = new Bitmap(screen.Image);
-            var rect = new Rectangle(0, 0, Width, Height);
-            var bmpData = output.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-            var ptr = bmpData.Scan0;
-            int AB = interlaceAB ? 1 : 0;
-            Parallel.For(0, Height / 2, ty => {
-                int y = ty * 2 + AB;
-                int x = 0;
-                Vector256<ushort> newCol, mix;
-                Vector256<ushort> col = GetColorFromPositions(Vector256.Create((float)x, (float)y, x + 2f, y, x + 4f, y, x + 6f, y),
-                        new Vector512<float>(Vector256.Create(0f, 1f, 0f, 0f, 0f, 1f, 0f, 0f)));
-                for(x = 1; x < Width; x += 8) {
-                    UnpackColorsFromVector(col, ptr, ((x-1) + Width * y) * 4, 8);
-                    newCol = GetColorFromPositions(Vector256.Create((float)x + 1f, (float)y, x + 3f, y, x + 5f, y, x + 7f, y),
-                        new Vector512<float>(Vector256.Create(0f, 1f, 0f, 0f, 0f, 1f, 0f, 0f)));
-                    mix = Avx2.Average(col, newCol);
-                    UnpackColorsFromVector(mix, ptr, (x + Width * y) * 4, 8);
-                    col = newCol;
-                }
-            });
-            interlaceAB = !interlaceAB;
-            output.UnlockBits(bmpData);
-            SetImage(output);
-            UpdateScreen();
-            output = null;
-            stopwatch.Stop();
-            tf++;
-            mspf += stopwatch.ElapsedMilliseconds;
-            //Console.WriteLine("Frame Rendered in {0}ms", stopwatch.ElapsedMilliseconds);
-        }
-
-        private void UnpackColorsFromVector(Vector256<ushort> uvec, IntPtr ptr, int offset, int arroffset) {
-            Vector256<byte> vec = uvec.AsByte();
-            Marshal.Copy(new byte[4] { vec.GetElement(1), vec.GetElement(3), vec.GetElement(5), 255 },
-                0, ptr + offset, 4);
-            Marshal.Copy(new byte[4] { vec.GetElement(9), vec.GetElement(11), vec.GetElement(13), 255 },
-                0, ptr + offset + arroffset, 4);
-            Marshal.Copy(new byte[4] { vec.GetElement(17), vec.GetElement(19), vec.GetElement(21), 255 },
-                0, ptr + offset + (arroffset * 2), 4);
-            Marshal.Copy(new byte[4] { vec.GetElement(25), vec.GetElement(27), vec.GetElement(29), 255 },
-                0, ptr + offset + (arroffset * 3), 4);
-        }
-
-        /*
-         * Vector3 getColorFromPos(Vector2 pos, float iTime) {
-            Vector3 col = new Vector3(0.01f);
-            Vector3 ro = new Vector3(0f, 1f, 0f);
-            Vector3 rd = Vector3.Normalize(new Vector3(Vector2.Divide(Vector2.Subtract(pos,
-                Vector2.Multiply(.5f, new Vector2(Width, Height))), Height), 1f));
-            float t = RayMarch(ro, rd);
-            if(t < 100) {
-                Vector3 p = Vector3.Add(ro, Vector3.Multiply(rd, t));
-                Vector3 lightPos = new Vector3(0, 5, 6);
-                Vector3 lightColor = new Vector3(0, 0, 1f);
-                lightPos.X += (float)Complex.Sin(iTime).Real;
-                lightPos.Z += (float)Complex.Multiply(Complex.Cos(iTime), 2f).Real;
-                Vector3 l = Vector3.Normalize(Vector3.Subtract(lightPos, p));
-                Vector3 n = GetNormal(p);
-                float dif = Clamp(Vector3.Dot(n, l), 0f, 1f);
-                float d = RayMarch(p + n * 0.01f, l);
-                if(d < Vector3.Distance(lightPos, p))
-                    dif *= .1f;
-                col += dif * lightColor;
-            }
-            return Vector3.Clamp(Vector3.Multiply(255f, col), Vector3.Zero, new Vector3(255f));
-        }
-         */
-
-
-
-        Vector256<ushort> GetColorFromPositions(Vector256<float> pos, Vector512<float> ro) {
-            Vector256<ushort> col = Vector256.Create((ushort)(0));
-            Vector256<float> uv;
-            //0.5 * Resolution
-            uv = Avx2.Multiply(Vector256.Create(0.5f),
-                Vector256.Create((float)Width, (float)Height, (float)Width, (float)Height,
-                (float)Width, (float)Height, (float)Width, (float)Height));
-            //pos - (0.5 * Resolution)
-            uv = Avx2.Subtract(pos, uv);
-            //(pos - (0.5 * Resolution)) / Height
-            uv = Avx2.Divide(uv, Vector256.Create((float)Height));
-            //new Vector3(uv, 1f)
-            Vector512<float> rd = new Vector512<float>(Vector256.Create(uv.GetElement(0), uv.GetElement(1), 1f, 0f,
-                uv.GetElement(2), uv.GetElement(3), 1f, 0f), Vector256.Create(uv.GetElement(4), uv.GetElement(5), 1f, 0f,
-                uv.GetElement(6), uv.GetElement(7), 1f, 0f));
-            Vector256<double> t = RayMarch(ro, rd);
-            Vector256<double> mask1 = Avx2.Compare(t, Vector256.Create(100d), FloatComparisonMode.OrderedLessThanNonSignaling);
-            if(Avx2.MoveMask(mask1) > 0) {
-                col = Vector256.Create((ushort)(64 << 8));
-            }
-            return col;
-        }
-
-        private Vector256<double> RayMarch(Vector512<float> ro, Vector512<float> rd) {
-            Vector256<double> dO, dS, mask1, mask2, n, iterations, mask3, a, one;
-            Vector512<float> p;
-            float x, y, z, w;
-            dO = Vector256.Create(.0);
-            iterations = Vector256.Create(100.0);
-            n = Vector256.Create(.0);
-            one = Vector256.Create(1.0);
-        repeat:
-            x = (float)dO.GetElement(0); y = (float)dO.GetElement(1); z = (float)dO.GetElement(2); w = (float)dO.GetElement(3);
-            p = new Vector512<float>(Vector256.Create(x, x, x, x, y, y, y, y), Vector256.Create(z, z, z, z, w, w, w, w));
-            p = Avx5.Add(ro, Avx5.Multiply(rd, p));
-            dS = GetDist(p);
-            dO = Avx2.Add(dO, dS);
-            mask1 = Avx2.Compare(dO, Vector256.Create(100d), FloatComparisonMode.OrderedLessThanOrEqualNonSignaling);
-            mask2 = Avx2.Compare(dS, Vector256.Create(.01), FloatComparisonMode.OrderedGreaterThanOrEqualNonSignaling);
-            mask3 = Avx2.Compare(n, iterations, FloatComparisonMode.OrderedLessThanNonSignaling);
-            a = Avx2.Or(mask1, mask2);
-            a = Avx2.And(a, mask3);
-            n = Avx2.Add(n, Avx2.And(a, one));
-            if(Avx2.MoveMask(a) > 0)
-                goto repeat;
-            return dO;
-        }
-
-        private Vector256<double> GetDist(Vector512<float> p) {
-            Vector512<float> s = new Vector512<float>(Vector256.Create(0f, 1f, 6f, 0f, 0f, 1f, 6f, 0f));
-            Vector256<double> sD = Avx2.Subtract(Avx5.Length(Avx5.Subtract(p, s)), Vector256.Create(0d));
-            Vector256<double> fD = Vector256.Create(p.V1.GetLower().GetElement(1), p.V1.GetUpper().GetElement(1),
-                p.V2.GetLower().GetElement(1), p.V2.GetUpper().GetElement(1));
-            Vector256<double> d = Avx2.Min(sD, fD);
-            return d;
-        }
-
-        #endregion
     }
 }
